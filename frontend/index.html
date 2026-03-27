@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>FoodShare — Connect. Share. Nourish.</title>
+  <meta name="description" content="FoodShare connects food donors with volunteers to reduce food waste and feed communities.">
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#22c55e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="FoodShare">
+  <link rel="apple-touch-icon" href="img/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="auth-bg" id="authBg">
+  <!-- Floating food particles -->
+  <div class="particles" id="particles" aria-hidden="true"></div>
+
+  <div class="auth-card" id="authCard">
+    <div class="auth-logo">
+      <div class="logo-big">🍽️ FoodShare</div>
+      <div class="logo-sub">Connecting donors with communities</div>
+    </div>
+
+    <!-- LOGIN -->
+    <div id="loginSection">
+      <div class="auth-title">Welcome back 👋</div>
+      <div class="auth-sub">Sign in to your FoodShare account</div>
+
+      <form id="loginForm" autocomplete="on">
+        <div class="form-group">
+          <label class="form-label" for="loginEmail">Email address</label>
+          <input class="form-control" type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email" required>
+        </div>
+        <div class="form-group" style="position:relative;">
+          <label class="form-label" for="loginPassword">Password</label>
+          <input class="form-control" type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" required style="padding-right:48px;">
+          <button type="button" onclick="togglePwd('loginPassword',this)" style="position:absolute;right:14px;bottom:13px;background:none;border:none;color:var(--text-muted);font-size:18px;line-height:1;cursor:pointer;padding:0;">👁</button>
+        </div>
+        <button class="btn btn-primary btn-full" type="submit" id="loginBtn" style="margin-top:4px;">
+          Sign In
+        </button>
+      </form>
+
+      <div class="auth-toggle">
+        New here? <a onclick="showSection('register')">Create an account</a>
+      </div>
+
+      <div class="divider">or try a demo</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <button class="btn btn-secondary" onclick="loginDemo('donor')" style="font-size:13px;">🤝 Demo Donor</button>
+        <button class="btn btn-secondary" onclick="loginDemo('volunteer')" style="font-size:13px;">🚴 Demo Volunteer</button>
+      </div>
+    </div>
+
+    <!-- REGISTER -->
+    <div id="registerSection" class="hidden">
+      <div class="auth-title">Join FoodShare 🌱</div>
+      <div class="auth-sub">Create your account in seconds</div>
+
+      <div class="form-group">
+        <label class="form-label">I want to</label>
+        <div class="role-selector">
+          <div class="role-btn" id="roleDonor" onclick="selectRole('donor')" tabindex="0">
+            <span class="role-emoji">🤝</span>
+            <span class="role-label">Donate Food</span>
+            <span class="role-desc">Share surplus food</span>
+          </div>
+          <div class="role-btn" id="roleVolunteer" onclick="selectRole('volunteer')" tabindex="0">
+            <span class="role-emoji">🚴</span>
+            <span class="role-label">Volunteer</span>
+            <span class="role-desc">Deliver to those in need</span>
+          </div>
+        </div>
+      </div>
+
+      <form id="registerForm" autocomplete="on">
+        <input type="hidden" id="regRole" value="">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="regName">Full Name</label>
+            <input class="form-control" type="text" id="regName" placeholder="Ravi Kumar" autocomplete="name" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="regPhone">Phone</label>
+            <input class="form-control" type="tel" id="regPhone" placeholder="+91 98765 43210" autocomplete="tel">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="regEmail">Email address</label>
+          <input class="form-control" type="email" id="regEmail" placeholder="you@example.com" autocomplete="email" required>
+        </div>
+        <div class="form-group" style="position:relative;">
+          <label class="form-label" for="regPassword">Password</label>
+          <input class="form-control" type="password" id="regPassword" placeholder="Min 6 characters" autocomplete="new-password" required style="padding-right:48px;">
+          <button type="button" onclick="togglePwd('regPassword',this)" style="position:absolute;right:14px;bottom:13px;background:none;border:none;color:var(--text-muted);font-size:18px;line-height:1;cursor:pointer;padding:0;">👁</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="regAddress">City / Area</label>
+          <input class="form-control" type="text" id="regAddress" placeholder="Mumbai, India" autocomplete="address-level2">
+        </div>
+        <button class="btn btn-primary btn-full" type="submit" id="registerBtn">
+          Create Account →
+        </button>
+      </form>
+
+      <div class="auth-toggle">
+        Already a member? <a onclick="showSection('login')">Sign in</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<style>
+  .particles { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .particle  {
+    position:absolute;
+    bottom:-60px;
+    font-size:28px;
+    animation: floatEmoji linear infinite;
+    opacity:0;
+    user-select:none;
+  }
+</style>
+
+<script>
+const API = '/api';
+let selectedRole = '';
+
+/* ── Particles ─────────────────────── */
+(function spawnParticles() {
+  const emojis = ['🍎','🥦','🍞','🥛','🍛','🍪','🥕','🍚','🌽','🥗'];
+  const box = document.getElementById('particles');
+  for (let i = 0; i < 14; i++) {
+    const p = document.createElement('div');
+    p.className = 'particle';
+    p.textContent = emojis[i % emojis.length];
+    p.style.left  = (Math.random() * 96) + '%';
+    p.style.animationDuration = (12 + Math.random() * 18) + 's';
+    p.style.animationDelay   = (-Math.random() * 20) + 's';
+    p.style.fontSize = (18 + Math.random() * 18) + 'px';
+    box.appendChild(p);
+  }
+})();
+
+/* ── UI helpers ───────────────────── */
+function showSection(s) {
+  document.getElementById('loginSection').classList.toggle('hidden',    s !== 'login');
+  document.getElementById('registerSection').classList.toggle('hidden', s !== 'register');
+  document.getElementById('authCard').style.animation = 'pageIn 0.3s var(--ease)';
+}
+
+function selectRole(r) {
+  selectedRole = r;
+  document.getElementById('regRole').value = r;
+  document.getElementById('roleDonor').className    = 'role-btn' + (r === 'donor'     ? ' selected-donor'     : '');
+  document.getElementById('roleVolunteer').className = 'role-btn' + (r === 'volunteer' ? ' selected-volunteer' : '');
+}
+
+function togglePwd(id, btn) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+  btn.textContent = el.type === 'password' ? '👁' : '🙈';
+}
+
+function toast(msg, type = 'info') {
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.appendChild(document.createTextNode(msg));
+  document.getElementById('toast-container').appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+function saveAndRedirect(data) {
+  localStorage.setItem('fs_token', data.token);
+  localStorage.setItem('fs_user', JSON.stringify(data.user));
+  window.location.href = 'dashboard.html';
+}
+
+/* ── Login ─────────────────────────── */
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('loginBtn');
+  btn.innerHTML = '<span class="spinner"></span> Signing in…';
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email:    document.getElementById('loginEmail').value,
+        password: document.getElementById('loginPassword').value
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast('Welcome back! Redirecting…', 'success');
+    setTimeout(() => saveAndRedirect(data), 700);
+  } catch (err) {
+    toast(err.message || 'Login failed', 'error');
+    btn.innerHTML = 'Sign In';
+    btn.disabled = false;
+  }
+});
+
+/* ── Register ──────────────────────── */
+document.getElementById('registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!selectedRole) return toast('Please choose your role first', 'error');
+  const btn = document.getElementById('registerBtn');
+  btn.innerHTML = '<span class="spinner"></span> Creating account…';
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name:     document.getElementById('regName').value,
+        email:    document.getElementById('regEmail').value,
+        password: document.getElementById('regPassword').value,
+        role:     selectedRole,
+        phone:    document.getElementById('regPhone').value,
+        address:  document.getElementById('regAddress').value
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    toast('🎉 Account created! Welcome to FoodShare!', 'success');
+    setTimeout(() => saveAndRedirect(data), 700);
+  } catch (err) {
+    toast(err.message || 'Registration failed', 'error');
+    btn.innerHTML = 'Create Account →';
+    btn.disabled = false;
+  }
+});
+
+/* ── Demo login ────────────────────── */
+async function loginDemo(role) {
+  const demos = {
+    donor:     { email: 'demo.donor@foodshare.app',     password: 'demo1234', name: 'Demo Donor',     phone: '+91 9876543210', address: 'Mumbai, India' },
+    volunteer: { email: 'demo.volunteer@foodshare.app', password: 'demo1234', name: 'Demo Volunteer', phone: '+91 9123456789', address: 'Delhi, India' }
+  };
+  const d = demos[role];
+  toast(`Logging in as ${role}…`, 'info');
+  let res = await fetch(`${API}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: d.email, password: d.password })
+  });
+  if (!res.ok) {
+    res = await fetch(`${API}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...d, role })
+    });
+  }
+  const data = await res.json();
+  if (data.token) { toast(`Welcome, ${role}! 🎉`, 'success'); setTimeout(() => saveAndRedirect(data), 600); }
+}
+
+/* ── Auto-redirect ─────────────────── */
+if (localStorage.getItem('fs_token')) window.location.href = 'dashboard.html';
+
+/* ── Service Worker ────────────────── */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>

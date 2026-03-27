@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>FoodShare — Dashboard</title>
+  <meta name="description" content="FoodShare dashboard — post food, accept requests, and track deliveries.">
+  <!-- PWA + iPhone -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#22c55e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="FoodShare">
+  <link rel="apple-touch-icon" href="img/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+
+<body>
+  <!-- Mobile hamburger -->
+  <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu">
+    <span></span><span></span><span></span>
+  </button>
+
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+  <div class="app-wrapper">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">🍽️ FoodShare</div>
+        <div class="logo-sub">Food Sharing Platform</div>
+      </div>
+      <nav class="sidebar-nav" id="sidebarNav"></nav>
+      <div class="sidebar-footer">
+        <div class="user-chip" id="userChip" onclick="navigateTo('profile')">
+          <div class="avatar" id="userAvatar"></div>
+          <div class="user-info">
+            <div class="user-name" id="userName"></div>
+            <div class="user-role" id="userRoleLabel"></div>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm btn-full" onclick="logout()" style="font-size:12px;letter-spacing:0.02em;">
+          Sign Out
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content" id="mainContent">
+      <div id="viewHome"></div>
+      <div id="viewPosts"         class="hidden"></div>
+      <div id="viewNewPost"       class="hidden"></div>
+      <div id="viewDeliveries"    class="hidden"></div>
+      <div id="viewNotifications" class="hidden"></div>
+      <div id="viewProfile"       class="hidden"></div>
+    </main>
+  </div>
+
+  <!-- Bottom nav -->
+  <nav class="bottom-nav" id="bottomNav"></nav>
+
+  <!-- Post Detail Modal -->
+  <div class="modal-overlay" id="postModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title" id="modalTitle">Food Details</span>
+        <span class="modal-close" onclick="closeModal()" role="button" aria-label="Close">✕</span>
+      </div>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script>
+    // ═══════════════════════════════════════════════════
+    // GLOBALS
+    // ═══════════════════════════════════════════════════
+    const API = '/api';
+    let token = localStorage.getItem('fs_token');
+    let user  = JSON.parse(localStorage.getItem('fs_user') || 'null');
+    let currentView = 'home';
+    let map, marker;
+
+    if (!token || !user) { window.location.href = 'index.html'; }
+
+    // ═══════════════════════════════════════════════════
+    // API HELPER
+    // ═══════════════════════════════════════════════════
+    function api(path, opts = {}) {
+      return fetch(API + path, {
+        ...opts,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(opts.headers || {})
+        }
+      }).then(async r => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Request failed');
+        return d;
+      });
+    }
+
+    // ═══════════════════════════════════════════════════
+    // UTILITIES
+    // ═══════════════════════════════════════════════════
+    function toast(msg, type = 'info') {
+      const t = document.createElement('div');
+      t.className = `toast toast-${type}`;
+      t.appendChild(document.createTextNode(msg));
+      document.getElementById('toast-container').appendChild(t);
+      setTimeout(() => t.remove(), 3500);
+    }
+
+    function logout() {
+      localStorage.clear();
+      window.location.href = 'index.html';
+    }
+
+    function timeAgo(dt) {
+      if (!dt) return '';
+      const diff = (Date.now() - new Date(dt)) / 1000;
+      if (diff < 60) return `${~~diff}s ago`;
+      if (diff < 3600) return `${~~(diff / 60)}m ago`;
+      if (diff < 86400) return `${~~(diff / 3600)}h ago`;
+      return `${~~(diff / 86400)}d ago`;
+    }
+
+    function fmtDate(dt) {
+      if (!dt) return '—';
+      return new Date(dt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function statusBadge(s) {
+      const icons = { available: '🟢', accepted: '🟡', picked_up: '🔵', delivered: '✅', expired: '🔴', cancelled: '⚫' };
+      return `<span class="badge badge-${s}">${icons[s] || ''} ${s.replace('_', ' ')}</span>`;
+    }
+
+    function categoryIcon(c) {
+      const m = { meals: '🍛', snacks: '🍪', fruits: '🍎', vegetables: '🥦', dairy: '🥛', bakery: '🍞', other: '📦' };
+      return m[c] || '📦';
+    }
+
+    function closeModal() {
+      document.getElementById('postModal').classList.remove('open');
+    }
+
+    // Animated number counter
+    function countUp(el, target, duration = 800) {
+      const start = performance.now();
+      const step = (now) => {
+        const progress = Math.min((now - start) / duration, 1);
+        el.textContent = Math.round(progress * target);
+        if (progress < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+
+    // Skeleton HTML
+    function skeletonStats() {
+      return `<div class="stats-grid">${[1,2,3,4].map(() =>
+        `<div class="skeleton skeleton-stat"></div>`).join('')}</div>`;
+    }
+    function skeletonCards() {
+      return `<div class="posts-grid">${[1,2,3,4,5,6].map(() => `
+        <div class="skeleton skeleton-card"></div>`).join('')}</div>`;
+    }
+
+    // ═══════════════════════════════════════════════════
+    // SIDEBAR / NAV SETUP
+    // ═══════════════════════════════════════════════════
+    function setupSidebar() {
+      const av = document.getElementById('userAvatar');
+      av.textContent = user.name[0].toUpperCase();
+      av.className = `avatar avatar-${user.role}`;
+      document.getElementById('userName').textContent = user.name;
+      document.getElementById('userRoleLabel').innerHTML =
+        `<span class="badge-role-${user.role}">${user.role.charAt(0).toUpperCase() + user.role.slice(1)}</span>`;
+
+      const donorNav = [
+        { id: 'home',          icon: '🏠', label: 'Dashboard' },
+        { id: 'newPost',       icon: '➕', label: 'Post Food' },
+        { id: 'posts',         icon: '📋', label: 'My Posts' },
+        { id: 'deliveries',    icon: '🚗', label: 'Deliveries' },
+        { id: 'notifications', icon: '🔔', label: 'Notifications', badge: true },
+        { id: 'profile',       icon: '👤', label: 'Profile' },
+      ];
+      const volunteerNav = [
+        { id: 'home',          icon: '🏠', label: 'Dashboard' },
+        { id: 'posts',         icon: '🍽️', label: 'Browse Food' },
+        { id: 'deliveries',    icon: '🚗', label: 'My Deliveries' },
+        { id: 'notifications', icon: '🔔', label: 'Notifications', badge: true },
+        { id: 'profile',       icon: '👤', label: 'Profile' },
+      ];
+
+      const items = user.role === 'donor' ? donorNav : volunteerNav;
+      const nav = document.getElementById('sidebarNav');
+      nav.innerHTML = `<div class="nav-section-label">Menu</div>` +
+        items.map(it => `
+          <div class="nav-item ${currentView === it.id ? 'active' : ''}" id="nav-${it.id}" onclick="navigateTo('${it.id}')">
+            <span class="nav-icon">${it.icon}</span>
+            <span>${it.label}</span>
+            ${it.badge ? `<span id="notifBadge" class="notif-badge hidden" style="margin-left:auto;">0</span>` : ''}
+          </div>`).join('');
+
+      pollNotifications();
+      setInterval(pollNotifications, 30000);
+    }
+
+    async function pollNotifications() {
+      try {
+        const { count } = await api('/notifications/unread-count');
+        const badge = document.getElementById('notifBadge');
+        if (badge) { badge.textContent = count; badge.classList.toggle('hidden', count === 0); }
+      } catch (e) {}
+    }
+
+    function navigateTo(view) {
+      currentView = view;
+      const allViews = ['home', 'posts', 'newPost', 'deliveries', 'notifications', 'profile'];
+      allViews.forEach(v => {
+        document.getElementById('view' + v.charAt(0).toUpperCase() + v.slice(1))?.classList.add('hidden');
+        document.getElementById(`nav-${v}`)?.classList.remove('active');
+      });
+
+      const camel = 'view' + view.charAt(0).toUpperCase() + view.slice(1);
+      const el = document.getElementById(camel);
+      if (el) {
+        el.classList.remove('hidden');
+        el.classList.remove('view-enter');
+        void el.offsetWidth; // force reflow
+        el.classList.add('view-enter');
+      }
+      document.getElementById(`nav-${view}`)?.classList.add('active');
+
+      const renders = {
+        home:          renderHome,
+        posts:         renderPosts,
+        newPost:       renderNewPost,
+        deliveries:    renderDeliveries,
+        notifications: renderNotifications,
+        profile:       renderProfile,
+      };
+      renders[view]?.();
+
+      // Update bottom nav
+      document.querySelectorAll('.bottom-nav-item').forEach(b => b.classList.remove('active'));
+      document.getElementById('bn-' + view)?.classList.add('active');
+    }
+
+    // ═══════════════════════════════════════════════════
+    // HOME / DASHBOARD
+    // ═══════════════════════════════════════════════════
+    async function renderHome() {
+      const el = document.getElementById('viewHome');
+      const hour = new Date().getHours();
+      const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+      el.innerHTML = `
+        <div class="page-header">
+          <h1>${greeting}, ${user.name.split(' ')[0]} 👋</h1>
+          <p>Here's your FoodShare activity at a glance</p>
+        </div>
+        ${skeletonStats()}
+        <div id="recentSection">
+          <div class="card">${skeletonCards().replace('posts-grid','').replace('<div class="skeleton skeleton-card"></div>'.repeat(6), [1,2,3].map(()=>'<div class="skeleton skeleton-line" style="height:56px;margin:0 0 10px;border-radius:12px;"></div>').join(''))}</div>
+        </div>`;
+
+      try {
+        const [posts, deliveries] = await Promise.all([api('/posts'), api('/deliveries')]);
+
+        let statsHtml = '';
+        if (user.role === 'donor') {
+          const available  = posts.filter(p => p.status === 'available').length;
+          const delivered  = posts.filter(p => p.status === 'delivered').length;
+          const inProgress = posts.filter(p => ['accepted', 'picked_up'].includes(p.status)).length;
+          statsHtml = `
+            <div class="stat-card"><div class="stat-label">Total Posted</div><div class="stat-value green" data-count="${posts.length}">0</div></div>
+            <div class="stat-card"><div class="stat-label">Available</div><div class="stat-value amber" data-count="${available}">0</div></div>
+            <div class="stat-card"><div class="stat-label">In Progress</div><div class="stat-value blue" data-count="${inProgress}">0</div></div>
+            <div class="stat-card"><div class="stat-label">Delivered ✅</div><div class="stat-value green" data-count="${delivered}">0</div></div>`;
+        } else {
+          const active = deliveries.filter(d => ['accepted', 'picked_up'].includes(d.status)).length;
+          const done   = deliveries.filter(d => d.status === 'delivered').length;
+          statsHtml = `
+            <div class="stat-card"><div class="stat-label">Total Deliveries</div><div class="stat-value green" data-count="${deliveries.length}">0</div></div>
+            <div class="stat-card"><div class="stat-label">Active 🚴</div><div class="stat-value amber" data-count="${active}">0</div></div>
+            <div class="stat-card"><div class="stat-label">Completed</div><div class="stat-value blue" data-count="${done}">0</div></div>
+            <div class="stat-card"><div class="stat-label">Food Available 🍽️</div><div class="stat-value green" data-count="${posts.length}">0</div></div>`;
+        }
+
+        el.querySelector('.stats-grid').outerHTML; // just ensure removed
+        el.innerHTML = `
+          <div class="page-header">
+            <h1>${greeting}, ${user.name.split(' ')[0]} 👋</h1>
+            <p>Here's your FoodShare activity at a glance</p>
+          </div>
+          <div class="stats-grid">${statsHtml}</div>
+          <div id="recentSection"></div>`;
+
+        // Animate counters
+        el.querySelectorAll('[data-count]').forEach(el => countUp(el, +el.dataset.count));
+
+        // Recent
+        const recent = user.role === 'donor' ? posts.slice(0,4) : deliveries.slice(0,4);
+        const recentTitle = user.role === 'donor' ? 'Recent Posts' : 'Recent Deliveries';
+
+        document.getElementById('recentSection').innerHTML = `
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">${recentTitle}</span>
+              <button class="btn btn-secondary btn-sm" onclick="navigateTo('${user.role === 'donor' ? 'posts' : 'deliveries'}')">View All →</button>
+            </div>
+            ${recent.length === 0
+              ? `<div class="empty-state" style="padding:32px 20px;"><span class="empty-icon">📭</span><h3>No activity yet</h3><p>${user.role === 'donor' ? 'Post food to get started' : 'Browse and accept food posts'}</p></div>`
+              : (user.role === 'donor'
+                ? recent.map(p => `
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="openPostModal(${p.id})">
+                    <div>
+                      <div style="font-weight:700;font-size:15px;">${categoryIcon(p.category)} ${p.food_name}</div>
+                      <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">${p.quantity} · ${timeAgo(p.created_at)}</div>
+                    </div>
+                    ${statusBadge(p.status)}
+                  </div>`).join('')
+                : recent.map(d => `
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border);">
+                    <div>
+                      <div style="font-weight:700;font-size:15px;">${categoryIcon(d.category)} ${d.food_name}</div>
+                      <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">by ${d.donor_name} · ${timeAgo(d.accepted_at)}</div>
+                    </div>
+                    ${statusBadge(d.status)}
+                  </div>`).join(''))}
+          </div>`;
+
+        // Quick action card for donor
+        if (user.role === 'donor') {
+          document.getElementById('recentSection').insertAdjacentHTML('beforeend', `
+            <div class="card mt-4" style="background:linear-gradient(135deg,rgba(34,197,94,0.12),rgba(251,191,36,0.06));border-color:rgba(34,197,94,0.2);">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;">
+                <div>
+                  <div style="font-size:17px;font-weight:800;margin-bottom:4px;">Ready to share food? 🍛</div>
+                  <div style="font-size:13px;color:var(--text-secondary);">Post surplus food for volunteers to pick up</div>
+                </div>
+                <button class="btn btn-primary" onclick="navigateTo('newPost')">+ Post Food</button>
+              </div>
+            </div>`);
+        } else {
+          document.getElementById('recentSection').insertAdjacentHTML('beforeend', `
+            <div class="card mt-4" style="background:linear-gradient(135deg,rgba(251,191,36,0.1),rgba(34,197,94,0.05));border-color:rgba(251,191,36,0.2);">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;">
+                <div>
+                  <div style="font-size:17px;font-weight:800;margin-bottom:4px;">Food waiting to be delivered 🚴</div>
+                  <div style="font-size:13px;color:var(--text-secondary);">${posts.length} food listing${posts.length !== 1 ? 's' : ''} available right now</div>
+                </div>
+                <button class="btn btn-amber" onclick="navigateTo('posts')">Browse Food</button>
+              </div>
+            </div>`);
+        }
+
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════════════════
+    // BROWSE / MY POSTS
+    // ═══════════════════════════════════════════════════
+    async function renderPosts() {
+      const el = document.getElementById('viewPosts');
+      const title    = user.role === 'donor' ? 'My Posts' : 'Browse Available Food';
+      const subtitle = user.role === 'donor' ? 'Manage your food donations' : 'Find food to pick up and deliver';
+      el.innerHTML = `
+        <div class="page-header">
+          <h1>${title}</h1>
+          <p>${subtitle}</p>
+        </div>
+        <div class="filter-bar">
+          <div class="search-input-wrap">
+            <span class="search-icon">🔍</span>
+            <input class="form-control search-input" id="searchInput" placeholder="Search food or location…" oninput="filterPosts()" autocomplete="off">
+          </div>
+          <select class="form-control" id="catFilter" onchange="filterPosts()" style="width:auto;">
+            <option value="">All Categories</option>
+            <option value="meals">🍛 Meals</option>
+            <option value="snacks">🍪 Snacks</option>
+            <option value="fruits">🍎 Fruits</option>
+            <option value="vegetables">🥦 Vegetables</option>
+            <option value="dairy">🥛 Dairy</option>
+            <option value="bakery">🍞 Bakery</option>
+            <option value="other">📦 Other</option>
+          </select>
+          ${user.role === 'donor' ? `
+          <select class="form-control" id="statusFilter" onchange="filterPosts()" style="width:auto;">
+            <option value="">All Status</option>
+            <option value="available">Available</option>
+            <option value="accepted">Accepted</option>
+            <option value="picked_up">Picked Up</option>
+            <option value="delivered">Delivered</option>
+          </select>` : ''}
+        </div>
+        <div id="postsGrid">${skeletonCards()}</div>`;
+      await loadPosts();
+    }
+
+    let allPosts = [];
+    async function loadPosts() {
+      try {
+        allPosts = await api('/posts');
+        filterPosts();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function filterPosts() {
+      const search = (document.getElementById('searchInput')?.value || '').toLowerCase();
+      const cat    =  document.getElementById('catFilter')?.value    || '';
+      const status =  document.getElementById('statusFilter')?.value || '';
+      let filtered = allPosts.filter(p => {
+        if (search && !p.food_name.toLowerCase().includes(search) && !p.pickup_address.toLowerCase().includes(search)) return false;
+        if (cat    && p.category !== cat)    return false;
+        if (status && p.status   !== status) return false;
+        return true;
+      });
+      renderPostsGrid(filtered);
+    }
+
+    function renderPostsGrid(posts) {
+      const el = document.getElementById('postsGrid');
+      if (!posts.length) {
+        el.innerHTML = `<div class="empty-state">
+          <span class="empty-icon">🍽️</span>
+          <h3>No food found</h3>
+          <p>Try adjusting filters or check back later</p>
+          ${user.role === 'donor' ? `<button class="btn btn-primary mt-4" onclick="navigateTo('newPost')">+ Post Food</button>` : ''}
+        </div>`;
+        return;
+      }
+      el.innerHTML = `<div class="posts-grid">${posts.map(p => `
+        <div class="food-card" onclick="openPostModal(${p.id})">
+          <div class="food-card-banner ${p.category}"></div>
+          <div class="food-card-body">
+            <div class="food-card-name">${categoryIcon(p.category)} ${p.food_name}</div>
+            <div class="food-card-desc">${p.description || 'No description provided'}</div>
+            <div class="food-card-meta">
+              <span class="meta-tag green">📦 ${p.quantity}</span>
+              <span class="meta-tag">📍 ${p.pickup_address.split(',')[0]}</span>
+              ${p.expiry_time ? `<span class="meta-tag amber">⏰ ${fmtDate(p.expiry_time)}</span>` : ''}
+            </div>
+            <div class="food-card-footer">
+              <span class="food-card-donor">by ${p.donor_name || user.name}</span>
+              ${statusBadge(p.status)}
+            </div>
+          </div>
+        </div>`).join('')}</div>`;
+    }
+
+    // ═══════════════════════════════════════════════════
+    // POST DETAIL MODAL
+    // ═══════════════════════════════════════════════════
+    async function openPostModal(id) {
+      document.getElementById('postModal').classList.add('open');
+      document.getElementById('modalBody').innerHTML = `<div style="text-align:center;padding:48px 20px;"><span class="spinner" style="width:32px;height:32px;font-size:24px;"></span><div style="margin-top:14px;color:var(--text-muted);font-size:14px;">Loading details…</div></div>`;
+      try {
+        const p = await api(`/posts/${id}`);
+        let actionBtn = '';
+        if (user.role === 'volunteer' && p.status === 'available') {
+          actionBtn = `<button class="btn btn-amber btn-full" onclick="acceptPost(${p.id})">🚴 Accept & Deliver</button>`;
+        } else if (user.role === 'donor' && p.status === 'available') {
+          actionBtn = `<button class="btn btn-danger btn-sm" onclick="deletePost(${p.id})">🗑️ Delete Post</button>`;
+        }
+
+        const steps = [
+          { label: 'Food Posted',         time: p.created_at },
+          { label: 'Volunteer Accepted',  time: ['accepted','picked_up','delivered'].includes(p.delivery_status) ? p.accepted_at : null },
+          { label: 'Food Picked Up',      time: ['picked_up','delivered'].includes(p.delivery_status) ? p.pickup_at  : null },
+          { label: 'Delivered ✅',         time: p.delivery_status === 'delivered' ? p.delivered_at : null }
+        ];
+        const statusOrder = ['created','accepted','picked_up','delivered'];
+        const curIdx = p.delivery_status ? statusOrder.indexOf(p.delivery_status) : 0;
+
+        document.getElementById('modalTitle').innerHTML = `${categoryIcon(p.category)} ${p.food_name}`;
+        document.getElementById('modalBody').innerHTML = `
+          <div class="food-card-meta" style="margin-bottom:18px;">
+            ${statusBadge(p.status)}
+            <span class="meta-tag">📍 ${p.pickup_address}</span>
+            <span class="meta-tag green">📦 ${p.quantity}</span>
+          </div>
+          ${p.description ? `<p style="font-size:14px;color:var(--text-secondary);margin-bottom:18px;line-height:1.6;">${p.description}</p>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">
+            <div class="stat-card" style="padding:16px;"><div class="stat-label">Donor</div><div style="font-size:14px;font-weight:700;margin-top:6px;">${p.donor_name}</div></div>
+            <div class="stat-card" style="padding:16px;"><div class="stat-label">Posted</div><div style="font-size:14px;font-weight:700;margin-top:6px;">${timeAgo(p.created_at)}</div></div>
+            ${p.volunteer_name ? `<div class="stat-card" style="padding:16px;"><div class="stat-label">Volunteer</div><div style="font-size:14px;font-weight:700;margin-top:6px;">${p.volunteer_name}</div></div>` : ''}
+            ${p.expiry_time    ? `<div class="stat-card" style="padding:16px;"><div class="stat-label">Expires</div><div style="font-size:14px;font-weight:700;margin-top:6px;">${fmtDate(p.expiry_time)}</div></div>` : ''}
+          </div>
+          <div style="margin-bottom:18px;">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:var(--text-muted);text-transform:uppercase;margin-bottom:14px;">Delivery Tracker</div>
+            <div class="tracker">
+              ${steps.map((s,i) => `
+                <div class="tracker-step ${i <= curIdx ? 'done' : ''} ${i === curIdx ? 'current' : ''}">
+                  <div class="step-dot">${i <= curIdx ? '✓' : '◦'}</div>
+                  <div class="step-info">
+                    <div class="step-title">${s.label}</div>
+                    <div class="step-time">${s.time ? fmtDate(s.time) : (i <= curIdx ? 'Completed' : 'Pending')}</div>
+                  </div>
+                </div>`).join('')}
+            </div>
+          </div>
+          ${p.latitude && p.longitude ? `<div id="modalMap" style="height:200px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:18px;"></div>` : ''}
+          ${actionBtn ? `<div>${actionBtn}</div>` : ''}`;
+
+        if (p.latitude && p.longitude) {
+          setTimeout(() => {
+            const m = L.map('modalMap').setView([p.latitude, p.longitude], 14);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(m);
+            L.marker([p.latitude, p.longitude]).addTo(m).bindPopup(p.pickup_address).openPopup();
+          }, 100);
+        }
+      } catch (e) { toast(e.message, 'error'); closeModal(); }
+    }
+
+    async function acceptPost(postId) {
+      try {
+        await api('/deliveries', { method: 'POST', body: JSON.stringify({ post_id: postId }) });
+        toast('🎉 You accepted this delivery!', 'success');
+        closeModal();
+        renderPosts();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function deletePost(postId) {
+      if (!confirm('Delete this food post?')) return;
+      try {
+        await api(`/posts/${postId}`, { method: 'DELETE' });
+        toast('Post deleted', 'info');
+        closeModal();
+        renderPosts();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════════════════
+    // NEW POST (DONOR ONLY)
+    // ═══════════════════════════════════════════════════
+    function renderNewPost() {
+      const el = document.getElementById('viewNewPost');
+      el.innerHTML = `
+        <div class="page-header"><h1>Post Food 🍛</h1><p>Share surplus food with your community</p></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+          <div class="card">
+            <div class="card-title" style="margin-bottom:20px;">Food Details</div>
+            <form id="newPostForm">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Food Name *</label>
+                  <input class="form-control" id="np_name" placeholder="e.g. Dal Rice, Bread" required>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Quantity *</label>
+                  <input class="form-control" id="np_qty" placeholder="e.g. 10 servings, 2 kg" required>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Category</label>
+                <select class="form-control" id="np_cat">
+                  <option value="meals">🍛 Meals</option>
+                  <option value="snacks">🍪 Snacks</option>
+                  <option value="fruits">🍎 Fruits</option>
+                  <option value="vegetables">🥦 Vegetables</option>
+                  <option value="dairy">🥛 Dairy</option>
+                  <option value="bakery">🍞 Bakery</option>
+                  <option value="other">📦 Other</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-control" id="np_desc" placeholder="Extra details, allergens, cooking method…"></textarea>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Pickup Address *</label>
+                <input class="form-control" id="np_addr" placeholder="Full address for pickup" required oninput="geocodeAddress()" autocomplete="street-address">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Best Before (optional)</label>
+                <input class="form-control" type="datetime-local" id="np_expiry">
+              </div>
+              <input type="hidden" id="np_lat">
+              <input type="hidden" id="np_lng">
+              <button class="btn btn-primary btn-full" type="submit" id="postBtn">📤 Post Food</button>
+            </form>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-title" style="margin-bottom:12px;">📍 Pin Location</div>
+              <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;">Click on the map to set the exact pickup location, or type your address above.</p>
+              <div id="map"></div>
+              <div id="mapCoords" style="font-size:12px;color:var(--text-muted);margin-top:10px;"></div>
+            </div>
+            <div class="card mt-4" style="background:rgba(34,197,94,0.05);border-color:rgba(34,197,94,0.18);">
+              <div style="font-size:13px;font-weight:700;color:var(--green-400);margin-bottom:10px;">💡 Tips for posting</div>
+              <ul style="font-size:13px;color:var(--text-secondary);line-height:2.1;padding-left:18px;">
+                <li>Be specific about quantity</li>
+                <li>Mention if food is cooked or packaged</li>
+                <li>Set expiry time for perishables</li>
+                <li>Keep pickup address accurate</li>
+                <li>Add a short description to help volunteers</li>
+              </ul>
+            </div>
+          </div>
+        </div>`;
+
+      setTimeout(() => {
+        map = L.map('map').setView([20.5937, 78.9629], 5);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        map.on('click', (e) => {
+          const { lat, lng } = e.latlng;
+          document.getElementById('np_lat').value = lat;
+          document.getElementById('np_lng').value = lng;
+          document.getElementById('mapCoords').innerHTML = `📌 <span style="color:var(--green-400);font-weight:600;">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`;
+          if (marker) map.removeLayer(marker);
+          marker = L.marker([lat, lng]).addTo(map);
+        });
+        navigator.geolocation?.getCurrentPosition(pos => {
+          map.setView([pos.coords.latitude, pos.coords.longitude], 13);
+        });
+      }, 100);
+
+      document.getElementById('newPostForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('postBtn');
+        btn.innerHTML = '<span class="spinner"></span> Posting…';
+        btn.disabled = true;
+        try {
+          await api('/posts', {
+            method: 'POST',
+            body: JSON.stringify({
+              food_name:      document.getElementById('np_name').value,
+              quantity:       document.getElementById('np_qty').value,
+              category:       document.getElementById('np_cat').value,
+              description:    document.getElementById('np_desc').value,
+              pickup_address: document.getElementById('np_addr').value,
+              latitude:       document.getElementById('np_lat').value  || null,
+              longitude:      document.getElementById('np_lng').value  || null,
+              expiry_time:    document.getElementById('np_expiry').value || null
+            })
+          });
+          toast('🎉 Food posted! Volunteers will be notified.', 'success');
+          navigateTo('posts');
+        } catch (err) {
+          toast(err.message, 'error');
+          btn.innerHTML = '📤 Post Food';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    let geocodeTimer;
+    function geocodeAddress() {
+      clearTimeout(geocodeTimer);
+      geocodeTimer = setTimeout(async () => {
+        const addr = document.getElementById('np_addr').value;
+        if (addr.length < 5 || !map) return;
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addr)}&limit=1`);
+          const data = await r.json();
+          if (data[0]) {
+            const lat = parseFloat(data[0].lat), lng = parseFloat(data[0].lon);
+            map.setView([lat, lng], 15);
+            document.getElementById('np_lat').value = lat;
+            document.getElementById('np_lng').value = lng;
+            document.getElementById('mapCoords').innerHTML = `📌 <span style="color:var(--green-400);font-weight:600;">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`;
+            if (marker) map.removeLayer(marker);
+            marker = L.marker([lat, lng]).addTo(map);
+          }
+        } catch (e) {}
+      }, 900);
+    }
+
+    // ═══════════════════════════════════════════════════
+    // DELIVERIES
+    // ═══════════════════════════════════════════════════
+    async function renderDeliveries() {
+      const el = document.getElementById('viewDeliveries');
+      el.innerHTML = `
+        <div class="page-header">
+          <h1>${user.role === 'volunteer' ? 'My Deliveries 🚴' : 'Delivery Tracking 🚗'}</h1>
+          <p>${user.role === 'volunteer' ? 'Track your active and past deliveries' : 'See how your donations are being delivered'}</p>
+        </div>
+        <div id="deliveriesList"><div style="text-align:center;padding:48px;color:var(--text-muted)"><span class="spinner" style="width:28px;height:28px;"></span></div></div>`;
+      try {
+        const deliveries = await api('/deliveries');
+        if (!deliveries.length) {
+          document.getElementById('deliveriesList').innerHTML = `
+            <div class="empty-state">
+              <span class="empty-icon">🚗</span>
+              <h3>No deliveries yet</h3>
+              <p>${user.role === 'volunteer' ? 'Accept a food post to start delivering' : 'Your deliveries will appear here'}</p>
+            </div>`;
+          return;
+        }
+
+        const active    = deliveries.filter(d => ['accepted','picked_up'].includes(d.status));
+        const completed = deliveries.filter(d => d.status === 'delivered');
+        let html = '';
+        if (active.length) {
+          html += `<div style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:var(--text-muted);text-transform:uppercase;margin-bottom:12px;">Active Deliveries</div>`;
+          html += active.map(d => deliveryCard(d, true)).join('');
+        }
+        if (completed.length) {
+          html += `<div style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:var(--text-muted);text-transform:uppercase;margin:20px 0 12px;">Completed</div>`;
+          html += completed.map(d => deliveryCard(d, false)).join('');
+        }
+        document.getElementById('deliveriesList').innerHTML = html;
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function deliveryCard(d, isActive) {
+      const nextLabel = { accepted: '🚗 Mark as Picked Up', picked_up: '✅ Mark as Delivered' };
+      return `
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-header" style="flex-wrap:wrap;gap:10px;">
+            <div>
+              <div style="font-size:17px;font-weight:800;letter-spacing:-0.2px;">${categoryIcon(d.category)} ${d.food_name}</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">📍 ${d.pickup_address} · ${d.quantity}</div>
+            </div>
+            ${statusBadge(d.status)}
+          </div>
+          <div class="tracker">
+            ${[
+              { label: 'Accepted',  done: true,                                          time: d.accepted_at   },
+              { label: 'Picked Up', done: ['picked_up','delivered'].includes(d.status),  time: d.pickup_at     },
+              { label: 'Delivered', done: d.status === 'delivered',                      time: d.delivered_at  }
+            ].map((s, i, arr) => `
+              <div class="tracker-step ${s.done ? 'done' : ''} ${!s.done && (i === 0 || arr[i-1].done) ? 'current' : ''}">
+                <div class="step-dot">${s.done ? '✓' : '◦'}</div>
+                <div class="step-info">
+                  <div class="step-title">${s.label}</div>
+                  <div class="step-time">${s.time ? fmtDate(s.time) : s.done ? 'Done' : 'Pending'}</div>
+                </div>
+              </div>`).join('')}
+          </div>
+          ${user.role === 'volunteer' && isActive ? `
+            <div style="margin-top:16px;">
+              <button class="btn btn-primary btn-full" onclick="advanceDelivery(${d.id})">${nextLabel[d.status] || ''}</button>
+            </div>` : ''}
+          <div style="margin-top:12px;font-size:12px;color:var(--text-muted);">
+            ${user.role === 'volunteer' ? `Donor: <strong>${d.donor_name}</strong>` : `Volunteer: <strong>${d.volunteer_name || '—'}</strong>`}
+            ${d.donor_phone && user.role === 'volunteer' ? ` · 📞 ${d.donor_phone}` : ''}
+          </div>
+        </div>`;
+    }
+
+    async function advanceDelivery(id) {
+      try {
+        await api(`/deliveries/${id}/status`, { method: 'PATCH', body: JSON.stringify({}) });
+        toast('Status updated! 🎉', 'success');
+        renderDeliveries();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ═══════════════════════════════════════════════════
+    // NOTIFICATIONS
+    // ═══════════════════════════════════════════════════
+    async function renderNotifications() {
+      const el = document.getElementById('viewNotifications');
+      el.innerHTML = `
+        <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div><h1>Notifications 🔔</h1><p>Stay updated on your activities</p></div>
+          <button class="btn btn-secondary btn-sm" onclick="markAllRead()">Mark all read</button>
+        </div>
+        <div id="notifList"><div style="text-align:center;padding:48px;color:var(--text-muted)"><span class="spinner" style="width:28px;height:28px;"></span></div></div>`;
+      try {
+        const notifs = await api('/notifications');
+        await api('/notifications/read-all', { method: 'PATCH' });
+        pollNotifications();
+        if (!notifs.length) {
+          document.getElementById('notifList').innerHTML = `
+            <div class="empty-state"><span class="empty-icon">🔕</span><h3>All caught up!</h3><p>No new notifications right now</p></div>`;
+          return;
+        }
+        document.getElementById('notifList').innerHTML = `
+          <div class="notif-list">${notifs.map(n => `
+            <div class="notif-item ${n.is_read ? '' : 'unread'}">
+              <div class="notif-icon">${n.type === 'food' ? '🍽️' : n.type === 'success' ? '✅' : 'ℹ️'}</div>
+              <div>
+                <div class="notif-title">${n.title}</div>
+                <div class="notif-msg">${n.message}</div>
+                <div class="notif-time">${timeAgo(n.created_at)}</div>
+              </div>
+            </div>`).join('')}</div>`;
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function markAllRead() {
+      await api('/notifications/read-all', { method: 'PATCH' });
+      toast('All notifications cleared', 'info');
+      renderNotifications();
+    }
+
+    // ═══════════════════════════════════════════════════
+    // PROFILE
+    // ═══════════════════════════════════════════════════
+    async function renderProfile() {
+      const el = document.getElementById('viewProfile');
+      el.innerHTML = `
+        <div class="page-header"><h1>Profile 👤</h1><p>Your FoodShare account</p></div>
+        <div class="profile-hero">
+          <div class="profile-avatar-lg avatar avatar-${user.role}" style="width:72px;height:72px;font-size:28px;font-weight:900;">
+            ${user.name[0].toUpperCase()}
+          </div>
+          <div>
+            <div class="profile-name">${user.name}</div>
+            <div class="profile-role">
+              <span class="badge-role-${user.role}" style="font-weight:700;font-size:14px;">
+                ${user.role === 'donor' ? '🤝 Food Donor' : '🚴 Volunteer Deliverer'}
+              </span>
+            </div>
+            ${user.phone ? `<div style="margin-top:8px;font-size:13px;color:var(--text-muted);">📞 ${user.phone}</div>` : ''}
+            ${user.address ? `<div style="font-size:13px;color:var(--text-muted);">📍 ${user.address}</div>` : ''}
+          </div>
+        </div>
+        <div id="profileStats" class="stats-grid" style="margin-bottom:24px;">
+          ${[1,2,3].map(() => `<div class="skeleton skeleton-stat"></div>`).join('')}
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:18px;">Account Details</div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--border);">
+              <span style="font-size:13px;color:var(--text-muted);">Full Name</span>
+              <span style="font-size:14px;font-weight:600;">${user.name}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--border);">
+              <span style="font-size:13px;color:var(--text-muted);">Role</span>
+              <span class="badge badge-${user.role === 'donor' ? 'available' : 'accepted'}">${user.role === 'donor' ? '🤝 Donor' : '🚴 Volunteer'}</span>
+            </div>
+            ${user.phone ? `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--border);">
+              <span style="font-size:13px;color:var(--text-muted);">Phone</span>
+              <span style="font-size:14px;font-weight:600;">${user.phone}</span>
+            </div>` : ''}
+            ${user.address ? `
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-size:13px;color:var(--text-muted);">Location</span>
+              <span style="font-size:14px;font-weight:600;">${user.address}</span>
+            </div>` : ''}
+          </div>
+        </div>
+        <div class="card" style="background:rgba(239,68,68,0.05);border-color:rgba(239,68,68,0.15);">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div>
+              <div style="font-weight:700;margin-bottom:4px;">Sign Out</div>
+              <div style="font-size:13px;color:var(--text-muted);">You'll need to log back in next time</div>
+            </div>
+            <button class="btn btn-danger" onclick="logout()">Sign Out →</button>
+          </div>
+        </div>`;
+
+      try {
+        const [posts, deliveries] = await Promise.all([api('/posts'), api('/deliveries')]);
+        const statsHtml = user.role === 'donor' ? `
+          <div class="stat-card"><div class="stat-label">Posts Created</div><div class="stat-value green" data-count="${posts.length}">0</div></div>
+          <div class="stat-card"><div class="stat-label">Delivered</div><div class="stat-value amber" data-count="${posts.filter(p=>p.status==='delivered').length}">0</div></div>
+          <div class="stat-card"><div class="stat-label">In Progress</div><div class="stat-value blue" data-count="${posts.filter(p=>['accepted','picked_up'].includes(p.status)).length}">0</div></div>
+        ` : `
+          <div class="stat-card"><div class="stat-label">Deliveries Done</div><div class="stat-value green" data-count="${deliveries.filter(d=>d.status==='delivered').length}">0</div></div>
+          <div class="stat-card"><div class="stat-label">Active</div><div class="stat-value amber" data-count="${deliveries.filter(d=>['accepted','picked_up'].includes(d.status)).length}">0</div></div>
+          <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value blue" data-count="${deliveries.length}">0</div></div>
+        `;
+        document.getElementById('profileStats').innerHTML = statsHtml;
+        document.querySelectorAll('#profileStats [data-count]').forEach(e => countUp(e, +e.dataset.count));
+      } catch (e) {}
+    }
+
+    // ═══════════════════════════════════════════════════
+    // INIT
+    // ═══════════════════════════════════════════════════
+    setupSidebar();
+    buildBottomNav();
+    navigateTo('home');
+
+    // Modal close on overlay click
+    document.getElementById('postModal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('postModal')) closeModal();
+    });
+
+    // Sidebar helpers
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.getElementById('sidebarOverlay').classList.toggle('open');
+    }
+    function closeSidebar() {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebarOverlay').classList.remove('open');
+    }
+
+    // Close sidebar on mobile nav tap
+    document.getElementById('sidebarNav').addEventListener('click', () => {
+      if (window.innerWidth <= 768) closeSidebar();
+    });
+
+    // Build bottom nav
+    function buildBottomNav() {
+      const donorItems = [
+        { id: 'home',          icon: '🏠',  label: 'Home' },
+        { id: 'newPost',       icon: '➕',  label: 'Post' },
+        { id: 'posts',         icon: '📋',  label: 'Posts' },
+        { id: 'deliveries',    icon: '🚗',  label: 'Deliver' },
+        { id: 'notifications', icon: '🔔',  label: 'Alerts' },
+      ];
+      const volunteerItems = [
+        { id: 'home',          icon: '🏠',  label: 'Home' },
+        { id: 'posts',         icon: '🍽️', label: 'Browse' },
+        { id: 'deliveries',    icon: '🚗',  label: 'Deliver' },
+        { id: 'notifications', icon: '🔔',  label: 'Alerts' },
+        { id: 'profile',       icon: '👤',  label: 'Profile' },
+      ];
+      const items = user.role === 'donor' ? donorItems : volunteerItems;
+      const nav   = document.getElementById('bottomNav');
+      nav.innerHTML = items.map(it => `
+        <button class="bottom-nav-item ${currentView === it.id ? 'active' : ''}" id="bn-${it.id}" onclick="navigateTo('${it.id}')">
+          <span class="bn-icon">${it.icon}</span>
+          <span class="bn-label">${it.label}</span>
+        </button>`).join('');
+    }
+
+    // Service worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
