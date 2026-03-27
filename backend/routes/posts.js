@@ -41,7 +41,7 @@ router.get('/', authenticate, (req, res) => {
     if (req.user.role === 'donor') {
         let q = `
       SELECT fp.*, u.name AS donor_name,
-             d.status AS delivery_status, d.volunteer_id,
+             d.status AS delivery_status, d.volunteer_id, d.receiver_name, d.proof_image,
              (SELECT name FROM users WHERE id = d.volunteer_id) AS volunteer_name
       FROM food_posts fp
       JOIN users u ON u.id = fp.donor_id
@@ -124,7 +124,7 @@ router.get('/stats', authenticate, (req, res) => {
 router.get('/:id', authenticate, (req, res) => {
     const post = db.prepare(`
     SELECT fp.*, u.name AS donor_name, u.phone AS donor_phone,
-           d.status AS delivery_status, d.accepted_at, d.pickup_at, d.delivered_at,
+           d.status AS delivery_status, d.accepted_at, d.pickup_at, d.delivered_at, d.receiver_name, d.proof_image,
            (SELECT name FROM users WHERE id = d.volunteer_id) AS volunteer_name
     FROM food_posts fp
     JOIN users u ON u.id = fp.donor_id

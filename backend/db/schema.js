@@ -56,6 +56,15 @@ db.exec(`
   );
 `);
 
+// Lightweight schema migrations for existing DBs
+const deliveryColumns = db.prepare("PRAGMA table_info(deliveries)").all();
+if (!deliveryColumns.some(c => c.name === 'receiver_name')) {
+  db.exec('ALTER TABLE deliveries ADD COLUMN receiver_name TEXT;');
+}
+if (!deliveryColumns.some(c => c.name === 'proof_image')) {
+  db.exec('ALTER TABLE deliveries ADD COLUMN proof_image TEXT;');
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +76,66 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS delivery_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery_id INTEGER NOT NULL,
+    reviewer_id INTEGER NOT NULL,
+    reviewee_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(delivery_id, reviewer_id),
+    FOREIGN KEY (delivery_id) REFERENCES deliveries(id),
+    FOREIGN KEY (reviewer_id) REFERENCES users(id),
+    FOREIGN KEY (reviewee_id) REFERENCES users(id)
+  );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS issue_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery_id INTEGER NOT NULL,
+    reporter_id INTEGER NOT NULL,
+    reported_user_id INTEGER NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('quality','timeliness','communication','safety','other')),
+    details TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (delivery_id) REFERENCES deliveries(id),
+    FOREIGN KEY (reporter_id) REFERENCES users(id),
+    FOREIGN KEY (reported_user_id) REFERENCES users(id)
+  );
+`);
+
+db.exec(`
+  CREATE VIEW IF NOT EXISTS user_reputation AS
+  SELECT
+    u.id AS user_id,
+    ROUND(COALESCE(AVG(dr.rating), 0), 2) AS avg_rating,
+    COUNT(dr.id) AS rating_count,
+    (
+      SELECT COUNT(*)
+      FROM issue_reports ir
+      WHERE ir.reported_user_id = u.id
+        AND ir.status = 'open'
+        AND datetime(ir.created_at) >= datetime('now', '-30 days')
+    ) AS open_reports_30d,
+    CASE
+      WHEN (
+        SELECT COUNT(*)
+        FROM issue_reports ir2
+        WHERE ir2.reported_user_id = u.id
+          AND ir2.status = 'open'
+          AND datetime(ir2.created_at) >= datetime('now', '-30 days')
+      ) >= 2 THEN 1
+      ELSE 0
+    END AS under_review
+  FROM users u
+  LEFT JOIN delivery_reviews dr ON dr.reviewee_id = u.id
+  GROUP BY u.id;
 `);
 
 // ── Tiny helper wrappers to match better-sqlite3 API ──────────────────

@@ -19,6 +19,15 @@ FoodShare is a modern, responsive full-stack web application designed to connect
 *   **Maps/Geolocation:** Leaflet.js
 *   **Icons/Fonts:** Google Fonts (Outfit)
 
+## 💸 Revenue Model (Judge Pitch)
+FoodShare is designed as a social-impact platform with sustainable B2B + B2G revenue:
+
+*   **NGO/City SaaS Dashboard:** Monthly subscription for NGOs/municipal bodies to get analytics, hotspot maps, and operational reporting.
+*   **Enterprise Donor Plans:** Restaurants, hotels, and event companies pay for branded accounts, CSR impact reports, and API integrations.
+*   **Verified Logistics Add-on:** Optional paid dispatch/SLA layer for priority pickups where volunteer coverage is low.
+*   **Impact Insights API:** Aggregated, anonymized food-waste and rescue metrics for research, policy, and ESG reporting.
+*   **Grant + CSR Partnerships:** Launch-phase support through foundations and CSR programs while transaction volume scales.
+
 ## 🚀 How to Run Locally (For Judges/Evaluators)
 
 To run this project on your own machine, follow these steps:

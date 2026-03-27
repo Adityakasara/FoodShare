@@ -174,7 +174,7 @@ function toast(msg, type = 'info') {
   t.className = `toast toast-${type}`;
   t.appendChild(document.createTextNode(msg));
   document.getElementById('toast-container').appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  setTimeout(() => t.remove(), 5000);
 }
 
 function saveAndRedirect(data) {

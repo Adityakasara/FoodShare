@@ -84,6 +84,13 @@
     let user  = JSON.parse(localStorage.getItem('fs_user') || 'null');
     let currentView = 'home';
     let map, marker;
+    let deliveriesCache = [];
+    let deliveryProofImageData = '';
+    let notificationPollTimer = null;
+    let knownNotificationIds = new Set();
+    let notificationBootstrapped = false;
+    let volunteerCoords = null;
+    let rescueRadarTimer = null;
 
     if (!token || !user) { window.location.href = 'index.html'; }
 
@@ -113,7 +120,7 @@
       t.className = `toast toast-${type}`;
       t.appendChild(document.createTextNode(msg));
       document.getElementById('toast-container').appendChild(t);
-      setTimeout(() => t.remove(), 3500);
+      setTimeout(() => t.remove(), 5000);
     }
 
     function logout() {
@@ -135,6 +142,15 @@
       return new Date(dt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
     }
 
+    function fmtHoursLeft(hoursLeft) {
+      if (hoursLeft == null || Number.isNaN(Number(hoursLeft))) return 'No expiry set';
+      const totalMinutes = Math.max(0, Math.round(Number(hoursLeft) * 60));
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      if (h <= 0) return `${m}m left`;
+      return `${h}h ${m}m left`;
+    }
+
     function statusBadge(s) {
       const icons = { available: '🟢', accepted: '🟡', picked_up: '🔵', delivered: '✅', expired: '🔴', cancelled: '⚫' };
       return `<span class="badge badge-${s}">${icons[s] || ''} ${s.replace('_', ' ')}</span>`;
@@ -147,6 +163,30 @@
 
     function closeModal() {
       document.getElementById('postModal').classList.remove('open');
+    }
+
+    function stopRescueRadarRefresh() {
+      if (rescueRadarTimer) {
+        clearInterval(rescueRadarTimer);
+        rescueRadarTimer = null;
+      }
+    }
+
+    function startRescueRadarRefresh() {
+      stopRescueRadarRefresh();
+      renderRescueRadar();
+      rescueRadarTimer = setInterval(() => {
+        if (currentView === 'home' && user.role === 'volunteer') renderRescueRadar();
+      }, 30000);
+    }
+
+    function escapeHtml(str = '') {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     // Animated number counter
@@ -207,20 +247,59 @@
             ${it.badge ? `<span id="notifBadge" class="notif-badge hidden" style="margin-left:auto;">0</span>` : ''}
           </div>`).join('');
 
+      startNotificationPolling();
+    }
+
+    function startNotificationPolling() {
+      if (notificationPollTimer) clearInterval(notificationPollTimer);
       pollNotifications();
-      setInterval(pollNotifications, 30000);
+      notificationPollTimer = setInterval(pollNotifications, 10000);
+    }
+
+    function maybeSystemNotification(n) {
+      if (document.visibilityState === 'visible') return;
+      if (!('Notification' in window)) return;
+      if (Notification.permission === 'granted') {
+        new Notification(n.title, { body: n.message, icon: '/img/icon-192.png' });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then((perm) => {
+          if (perm === 'granted') {
+            new Notification(n.title, { body: n.message, icon: '/img/icon-192.png' });
+          }
+        }).catch(() => {});
+      }
     }
 
     async function pollNotifications() {
       try {
-        const { count } = await api('/notifications/unread-count');
+        const [countResp, notifications] = await Promise.all([
+          api('/notifications/unread-count'),
+          api('/notifications')
+        ]);
+        const count = Number(countResp?.count || 0);
         const badge = document.getElementById('notifBadge');
         if (badge) { badge.textContent = count; badge.classList.toggle('hidden', count === 0); }
+
+        if (!Array.isArray(notifications)) return;
+
+        if (!notificationBootstrapped) {
+          notifications.forEach(n => knownNotificationIds.add(n.id));
+          notificationBootstrapped = true;
+          return;
+        }
+
+        const newUnread = notifications.filter(n => !n.is_read && !knownNotificationIds.has(n.id));
+        notifications.forEach(n => knownNotificationIds.add(n.id));
+        newUnread.slice(0, 3).forEach((n) => {
+          toast(`${n.title}: ${n.message}`, 'info');
+          maybeSystemNotification(n);
+        });
       } catch (e) {}
     }
 
     function navigateTo(view) {
       currentView = view;
+      if (!(view === 'home' && user.role === 'volunteer')) stopRescueRadarRefresh();
       const allViews = ['home', 'posts', 'newPost', 'deliveries', 'notifications', 'profile'];
       allViews.forEach(v => {
         document.getElementById('view' + v.charAt(0).toUpperCase() + v.slice(1))?.classList.add('hidden');
@@ -347,7 +426,18 @@
                 </div>
                 <button class="btn btn-primary" onclick="navigateTo('newPost')">+ Post Food</button>
               </div>
+            </div>
+            <div class="card mt-4" style="background:rgba(59,130,246,0.06);border-color:rgba(59,130,246,0.2);">
+              <div class="card-header">
+                <span class="card-title">🏠 Nearby Needful Contacts</span>
+              </div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
+                Allow location to find nearby NGOs, orphanages and homeless support centers for direct handover.
+              </div>
+              <button class="btn btn-amber" onclick="loadDonorHomeContactsByLocation()" id="homeContactsBtn">Use My Location</button>
+              <div id="homeSupportContacts" style="margin-top:14px;"></div>
             </div>`);
+          loadDonorHomeContactsByLocation();
         } else {
           document.getElementById('recentSection').insertAdjacentHTML('beforeend', `
             <div class="card mt-4" style="background:linear-gradient(135deg,rgba(251,191,36,0.1),rgba(34,197,94,0.05));border-color:rgba(251,191,36,0.2);">
@@ -358,10 +448,112 @@
                 </div>
                 <button class="btn btn-amber" onclick="navigateTo('posts')">Browse Food</button>
               </div>
+            </div>
+            <div class="card mt-4" style="border-color:rgba(239,68,68,0.35);background:linear-gradient(135deg,rgba(239,68,68,0.08),rgba(251,191,36,0.08));">
+              <div class="card-header">
+                <span class="card-title">🔥 Rescue Radar</span>
+                <span style="font-size:11px;color:var(--text-muted);">Live urgent missions</span>
+              </div>
+              <div id="rescueRadarList">
+                <div style="text-align:center;padding:20px;color:var(--text-muted);"><span class="spinner" style="width:22px;height:22px;"></span></div>
+              </div>
             </div>`);
+          startRescueRadarRefresh();
         }
 
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function renderRescueRadar() {
+      if (user.role !== 'volunteer') return;
+      const box = document.getElementById('rescueRadarList');
+      if (!box) return;
+
+      try {
+        const coords = await getVolunteerCoordinates();
+        const radiusKm = 20;
+        let posts;
+        if (coords) {
+          const q = new URLSearchParams({
+            lat: String(coords.lat),
+            lng: String(coords.lng),
+            radius: String(radiusKm)
+          });
+          posts = await api(`/posts?${q.toString()}`);
+        } else {
+          posts = await api('/posts');
+        }
+
+        const deliveries = await api('/deliveries');
+        const weekStart = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        const rescueStreak = deliveries.filter(d => d.status === 'delivered' && d.delivered_at && new Date(d.delivered_at).getTime() >= weekStart).length;
+
+        const rank = { critical: 4, high: 3, medium: 2, low: 1, expired: 0 };
+        const missions = posts
+          .filter(p => p.status === 'available')
+          .map((p) => {
+            const distanceKm = (coords && p.latitude && p.longitude)
+              ? kmDistance(coords.lat, coords.lng, Number(p.latitude), Number(p.longitude))
+              : null;
+            const priority = rank[p.priority_level] || 0;
+            const urgencyBonus = p.priority_hours_left != null ? Math.max(0, 6 - Number(p.priority_hours_left)) : 0;
+            const distancePenalty = distanceKm == null ? 0 : Math.min(distanceKm / 2, 10);
+            const score = (priority * 100) + (urgencyBonus * 10) - distancePenalty;
+            const etaMin = distanceKm == null ? null : Math.max(5, Math.round((distanceKm / 22) * 60));
+            return { ...p, distanceKm, score, etaMin };
+          })
+          .filter(p => ['critical', 'high'].includes(p.priority_level))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+
+        if (!missions.length) {
+          box.innerHTML = `
+            <div style="font-size:13px;color:var(--text-muted);">
+              No urgent rescue missions right now.
+            </div>
+            <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);">
+              Your 7-day rescue streak: <strong>${rescueStreak}</strong> deliveries
+            </div>
+          `;
+          return;
+        }
+
+        box.innerHTML = `
+          <div style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
+            Your 7-day rescue streak: <strong>${rescueStreak}</strong> deliveries
+          </div>
+          ${missions.map((m) => `
+            <div style="padding:12px;border:1px solid rgba(239,68,68,0.25);border-radius:12px;margin-bottom:10px;background:rgba(255,255,255,0.45);">
+              <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+                <div>
+                  <div style="font-size:15px;font-weight:800;">${categoryIcon(m.category)} ${m.food_name}</div>
+                  <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${m.pickup_address}</div>
+                </div>
+                <span class="badge badge-${m.priority_level || 'available'}">${(m.priority_level || 'urgent').toUpperCase()}</span>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <span class="meta-tag amber">⏳ ${fmtHoursLeft(m.priority_hours_left)}</span>
+                ${m.distanceKm == null ? '' : `<span class="meta-tag">📍 ${m.distanceKm.toFixed(1)} km</span>`}
+                ${m.etaMin == null ? '' : `<span class="meta-tag green">🚴 ETA ~${m.etaMin} min</span>`}
+              </div>
+              <button class="btn btn-danger btn-sm" style="margin-top:10px;" onclick="acceptRescueMission(${m.id})">Accept Rescue Mission</button>
+            </div>
+          `).join('')}
+        `;
+      } catch (e) {
+        box.innerHTML = `<div style="font-size:13px;color:var(--text-muted);">Unable to load rescue missions right now.</div>`;
+      }
+    }
+
+    async function acceptRescueMission(postId) {
+      try {
+        await api('/deliveries', { method: 'POST', body: JSON.stringify({ post_id: postId }) });
+        toast('Rescue mission accepted. Move fast.', 'success');
+        renderRescueRadar();
+        renderDeliveries();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
     }
 
     // ═══════════════════════════════════════════════════
@@ -391,6 +583,14 @@
             <option value="bakery">🍞 Bakery</option>
             <option value="other">📦 Other</option>
           </select>
+          ${user.role === 'volunteer' ? `
+          <select class="form-control" id="radiusFilter" onchange="loadPosts()" style="width:auto;">
+            <option value="5">Within 5 km</option>
+            <option value="10" selected>Within 10 km</option>
+            <option value="20">Within 20 km</option>
+            <option value="50">Within 50 km</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="loadPosts()">Refresh Nearby</button>` : ''}
           ${user.role === 'donor' ? `
           <select class="form-control" id="statusFilter" onchange="filterPosts()" style="width:auto;">
             <option value="">All Status</option>
@@ -405,9 +605,36 @@
     }
 
     let allPosts = [];
+    function getVolunteerCoordinates() {
+      return new Promise((resolve) => {
+        if (volunteerCoords) return resolve(volunteerCoords);
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition((pos) => {
+          volunteerCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          resolve(volunteerCoords);
+        }, () => resolve(null), { enableHighAccuracy: true, timeout: 8000 });
+      });
+    }
+
     async function loadPosts() {
       try {
-        allPosts = await api('/posts');
+        if (user.role === 'volunteer') {
+          const radius = Number(document.getElementById('radiusFilter')?.value || 10);
+          const coords = await getVolunteerCoordinates();
+          if (coords) {
+            const q = new URLSearchParams({
+              lat: String(coords.lat),
+              lng: String(coords.lng),
+              radius: String(radius)
+            });
+            allPosts = await api(`/posts?${q.toString()}`);
+          } else {
+            allPosts = await api('/posts');
+            toast('Location unavailable, showing all available food', 'info');
+          }
+        } else {
+          allPosts = await api('/posts');
+        }
         filterPosts();
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -506,6 +733,13 @@
                 </div>`).join('')}
             </div>
           </div>
+          ${p.status === 'delivered' && (p.receiver_name || p.proof_image) ? `
+            <div style="margin-bottom:18px;padding:12px;border:1px solid var(--border);border-radius:12px;background:rgba(34,197,94,0.04);">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">Delivery Proof</div>
+              ${p.receiver_name ? `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">Received by: <strong>${p.receiver_name}</strong></div>` : ''}
+              ${p.proof_image ? `<img src="${p.proof_image}" alt="Delivery proof" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;border:1px solid var(--border);">` : ''}
+            </div>
+          ` : ''}
           ${p.latitude && p.longitude ? `<div id="modalMap" style="height:200px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:18px;"></div>` : ''}
           ${actionBtn ? `<div>${actionBtn}</div>` : ''}`;
 
@@ -690,6 +924,7 @@
         <div id="deliveriesList"><div style="text-align:center;padding:48px;color:var(--text-muted)"><span class="spinner" style="width:28px;height:28px;"></span></div></div>`;
       try {
         const deliveries = await api('/deliveries');
+        deliveriesCache = deliveries;
         if (!deliveries.length) {
           document.getElementById('deliveriesList').innerHTML = `
             <div class="empty-state">
@@ -717,6 +952,15 @@
 
     function deliveryCard(d, isActive) {
       const nextLabel = { accepted: '🚗 Mark as Picked Up', picked_up: '✅ Mark as Delivered' };
+      const showReview = d.status === 'delivered' && !Number(d.current_user_reviewed);
+      const actions = [];
+      if (user.role === 'volunteer' && isActive) {
+        actions.push(`<button class="btn btn-primary btn-full" onclick="advanceDelivery(${d.id})">${nextLabel[d.status] || ''}</button>`);
+      }
+      if (showReview) {
+        actions.push(`<button class="btn btn-amber btn-full" onclick="openReviewModal(${d.id})">⭐ Rate Experience</button>`);
+      }
+      actions.push(`<button class="btn btn-secondary btn-full" onclick="openReportModal(${d.id})">⚠️ Report Issue</button>`);
       return `
         <div class="card" style="margin-bottom:16px;">
           <div class="card-header" style="flex-wrap:wrap;gap:10px;">
@@ -740,10 +984,16 @@
                 </div>
               </div>`).join('')}
           </div>
-          ${user.role === 'volunteer' && isActive ? `
-            <div style="margin-top:16px;">
-              <button class="btn btn-primary btn-full" onclick="advanceDelivery(${d.id})">${nextLabel[d.status] || ''}</button>
-            </div>` : ''}
+          ${d.status === 'delivered' && (d.receiver_name || d.proof_image) ? `
+            <div style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:12px;background:rgba(34,197,94,0.04);">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">Delivery Proof</div>
+              ${d.receiver_name ? `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">Received by: <strong>${d.receiver_name}</strong></div>` : ''}
+              ${d.proof_image ? `<img src="${d.proof_image}" alt="Delivery proof" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;border:1px solid var(--border);">` : ''}
+            </div>
+          ` : ''}
+          <div style="margin-top:16px;display:grid;gap:10px;">
+            ${actions.join('')}
+          </div>
           <div style="margin-top:12px;font-size:12px;color:var(--text-muted);">
             ${user.role === 'volunteer' ? `Donor: <strong>${d.donor_name}</strong>` : `Volunteer: <strong>${d.volunteer_name || '—'}</strong>`}
             ${d.donor_phone && user.role === 'volunteer' ? ` · 📞 ${d.donor_phone}` : ''}
@@ -752,11 +1002,190 @@
     }
 
     async function advanceDelivery(id) {
+      const delivery = deliveriesCache.find(d => d.id === id);
+      if (delivery && delivery.status === 'picked_up') {
+        openDeliveryProofModal(id);
+        return;
+      }
       try {
         await api(`/deliveries/${id}/status`, { method: 'PATCH', body: JSON.stringify({}) });
         toast('Status updated! 🎉', 'success');
         renderDeliveries();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    function openDeliveryProofModal(deliveryId) {
+      const d = deliveriesCache.find(x => x.id === deliveryId);
+      if (!d) return toast('Delivery not found', 'error');
+      deliveryProofImageData = '';
+      document.getElementById('postModal').classList.add('open');
+      document.getElementById('modalTitle').textContent = `✅ Confirm Delivery: ${d.food_name}`;
+      document.getElementById('modalBody').innerHTML = `
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;">
+          Add delivery confirmation details before marking this as delivered.
+        </div>
+        <div class="form-group">
+          <label class="form-label">Receiver Name (optional)</label>
+          <input class="form-control" id="proofReceiverName" maxlength="120" placeholder="Person who received the food">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Receiver Photo (optional)</label>
+          <input class="form-control" id="proofImageInput" type="file" accept="image/*" onchange="handleProofImageChange(event)">
+          <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Tip: a clear handover photo improves trust records.</div>
+        </div>
+        <div id="proofImagePreviewWrap" class="hidden" style="margin-bottom:12px;">
+          <img id="proofImagePreview" alt="Proof preview" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;border:1px solid var(--border);">
+        </div>
+        <button class="btn btn-primary btn-full" id="submitProofBtn" onclick="submitDeliveredWithProof(${deliveryId})">Mark as Delivered</button>
+      `;
+    }
+
+    function handleProofImageChange(event) {
+      const file = event.target.files?.[0];
+      if (!file) {
+        deliveryProofImageData = '';
+        document.getElementById('proofImagePreviewWrap')?.classList.add('hidden');
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        toast('Please select an image file', 'error');
+        event.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        deliveryProofImageData = String(reader.result || '');
+        const img = document.getElementById('proofImagePreview');
+        if (img) img.src = deliveryProofImageData;
+        document.getElementById('proofImagePreviewWrap')?.classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function submitDeliveredWithProof(deliveryId) {
+      const receiver_name = (document.getElementById('proofReceiverName')?.value || '').trim();
+      const btn = document.getElementById('submitProofBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Updating…';
+      try {
+        await api(`/deliveries/${deliveryId}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            receiver_name,
+            proof_image: deliveryProofImageData || null
+          })
+        });
+        toast('Delivery completed with proof', 'success');
+        closeModal();
+        renderDeliveries();
+      } catch (e) {
+        toast(e.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = 'Mark as Delivered';
+      }
+    }
+
+    function openReviewModal(deliveryId) {
+      const d = deliveriesCache.find(x => x.id === deliveryId);
+      if (!d) return toast('Delivery not found', 'error');
+      document.getElementById('postModal').classList.add('open');
+      document.getElementById('modalTitle').textContent = `⭐ Rate: ${d.food_name}`;
+      document.getElementById('modalBody').innerHTML = `
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;">
+          Rate your experience with ${user.role === 'volunteer' ? d.donor_name : (d.volunteer_name || 'the volunteer')}.
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:14px;" id="ratingStars">
+          ${[1,2,3,4,5].map(i => `<button type="button" class="btn btn-secondary btn-sm rating-star" data-rating="${i}" onclick="setSelectedRating(${i})">${i}★</button>`).join('')}
+        </div>
+        <input type="hidden" id="selectedRating" value="0">
+        <div class="form-group">
+          <label class="form-label">Comment (optional)</label>
+          <textarea class="form-control" id="reviewNote" maxlength="300" placeholder="Share a short feedback note"></textarea>
+        </div>
+        <button class="btn btn-primary btn-full" id="submitReviewBtn" onclick="submitReview(${deliveryId})">Submit Review</button>
+      `;
+    }
+
+    function setSelectedRating(rating) {
+      document.getElementById('selectedRating').value = String(rating);
+      document.querySelectorAll('.rating-star').forEach((btn) => {
+        btn.classList.toggle('btn-amber', Number(btn.dataset.rating) <= rating);
+        btn.classList.toggle('btn-secondary', Number(btn.dataset.rating) > rating);
+      });
+    }
+
+    async function submitReview(deliveryId) {
+      const rating = Number(document.getElementById('selectedRating')?.value || 0);
+      const note = document.getElementById('reviewNote')?.value || '';
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return toast('Select a rating from 1 to 5 stars', 'error');
+      }
+
+      const btn = document.getElementById('submitReviewBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Submitting…';
+      try {
+        await api(`/deliveries/${deliveryId}/review`, {
+          method: 'POST',
+          body: JSON.stringify({ rating, note })
+        });
+        toast('Thanks for the review', 'success');
+        closeModal();
+        renderDeliveries();
+      } catch (e) {
+        toast(e.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = 'Submit Review';
+      }
+    }
+
+    function openReportModal(deliveryId) {
+      const d = deliveriesCache.find(x => x.id === deliveryId);
+      if (!d) return toast('Delivery not found', 'error');
+      document.getElementById('postModal').classList.add('open');
+      document.getElementById('modalTitle').textContent = `⚠️ Report: ${d.food_name}`;
+      document.getElementById('modalBody').innerHTML = `
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;">
+          Report a trust/safety issue for this delivery. This creates an internal signal only.
+        </div>
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <select class="form-control" id="reportCategory">
+            <option value="quality">Food Quality</option>
+            <option value="timeliness">Timeliness</option>
+            <option value="communication">Communication</option>
+            <option value="safety">Safety</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Details</label>
+          <textarea class="form-control" id="reportDetails" maxlength="1000" placeholder="Describe what happened" required></textarea>
+        </div>
+        <button class="btn btn-danger btn-full" id="submitReportBtn" onclick="submitReport(${deliveryId})">Submit Report</button>
+      `;
+    }
+
+    async function submitReport(deliveryId) {
+      const category = document.getElementById('reportCategory')?.value || '';
+      const details = (document.getElementById('reportDetails')?.value || '').trim();
+      if (!details) return toast('Please add report details', 'error');
+
+      const btn = document.getElementById('submitReportBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Submitting…';
+      try {
+        await api(`/deliveries/${deliveryId}/report`, {
+          method: 'POST',
+          body: JSON.stringify({ category, details })
+        });
+        toast('Report submitted', 'success');
+        closeModal();
+      } catch (e) {
+        toast(e.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = 'Submit Report';
+      }
     }
 
     // ═══════════════════════════════════════════════════
@@ -772,8 +1201,6 @@
         <div id="notifList"><div style="text-align:center;padding:48px;color:var(--text-muted)"><span class="spinner" style="width:28px;height:28px;"></span></div></div>`;
       try {
         const notifs = await api('/notifications');
-        await api('/notifications/read-all', { method: 'PATCH' });
-        pollNotifications();
         if (!notifs.length) {
           document.getElementById('notifList').innerHTML = `
             <div class="empty-state"><span class="empty-icon">🔕</span><h3>All caught up!</h3><p>No new notifications right now</p></div>`;
@@ -781,7 +1208,7 @@
         }
         document.getElementById('notifList').innerHTML = `
           <div class="notif-list">${notifs.map(n => `
-            <div class="notif-item ${n.is_read ? '' : 'unread'}">
+            <div class="notif-item ${n.is_read ? '' : 'unread'}" onclick="markNotificationRead(${n.id})">
               <div class="notif-icon">${n.type === 'food' ? '🍽️' : n.type === 'success' ? '✅' : 'ℹ️'}</div>
               <div>
                 <div class="notif-title">${n.title}</div>
@@ -792,9 +1219,20 @@
       } catch (e) { toast(e.message, 'error'); }
     }
 
+    async function markNotificationRead(id) {
+      try {
+        await api(`/notifications/${id}/read`, { method: 'PATCH' });
+        pollNotifications();
+        renderNotifications();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+
     async function markAllRead() {
       await api('/notifications/read-all', { method: 'PATCH' });
       toast('All notifications cleared', 'info');
+      pollNotifications();
       renderNotifications();
     }
 
@@ -820,6 +1258,10 @@
             ${user.address ? `<div style="font-size:13px;color:var(--text-muted);">📍 ${user.address}</div>` : ''}
           </div>
         </div>
+        <div class="card" id="reputationCard" style="margin-bottom:16px;">
+          <div style="text-align:center;padding:24px;color:var(--text-muted)"><span class="spinner" style="width:22px;height:22px;"></span></div>
+        </div>
+        <div id="donorFallbackArea" style="margin-bottom:16px;"></div>
         <div id="profileStats" class="stats-grid" style="margin-bottom:24px;">
           ${[1,2,3].map(() => `<div class="skeleton skeleton-stat"></div>`).join('')}
         </div>
@@ -857,7 +1299,56 @@
         </div>`;
 
       try {
-        const [posts, deliveries] = await Promise.all([api('/posts'), api('/deliveries')]);
+        const requests = [api('/posts'), api('/deliveries'), api(`/users/${user.id}/reputation`)];
+        if (user.role === 'donor') requests.push(api('/posts/stats'));
+        const [posts, deliveries, reputation, platformStats] = await Promise.all(requests);
+        if (user.role === 'donor') {
+          const noVolunteers = platformStats?.totals?.total_volunteers === 0;
+          const subtitle = noVolunteers
+            ? 'No volunteers are currently on the platform. Contact nearby NGOs/orphanages/homeless support directly.'
+            : 'You can directly contact nearby NGOs/orphanages/homeless support as a fallback option.';
+          document.getElementById('donorFallbackArea').innerHTML = `
+            <div class="card" style="background:rgba(251,191,36,0.08);border-color:rgba(251,191,36,0.24);">
+              <div class="card-header">
+                <div class="card-title">Nearby NGO & Shelter Contacts</div>
+              </div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
+                ${subtitle}
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">
+                Using donor address: <strong>${user.address ? escapeHtml(user.address) : 'Not set in profile'}</strong>
+              </div>
+              <button class="btn btn-amber" onclick="loadSupportContactsByAddress()" id="loadSupportBtn">Refresh Contacts</button>
+              <div id="supportPlacesList" style="margin-top:14px;">
+                <div style="text-align:center;padding:18px;color:var(--text-muted)"><span class="spinner" style="width:20px;height:20px;"></span></div>
+              </div>
+            </div>
+          `;
+          loadSupportContactsByAddress();
+        } else {
+          document.getElementById('donorFallbackArea').innerHTML = '';
+        }
+        const underReviewBadge = reputation.under_review
+          ? `<span class="badge badge-cancelled" style="margin-left:8px;">Under review</span>`
+          : '';
+        document.getElementById('reputationCard').innerHTML = `
+          <div class="card-header">
+            <div class="card-title">Trust Score</div>
+            ${underReviewBadge}
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;">
+            <div>
+              <div style="font-size:34px;font-weight:900;line-height:1;">
+                ${Number(reputation.avg_rating || 0).toFixed(2)}
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">Average rating</div>
+            </div>
+            <div style="font-size:14px;color:var(--text-secondary);padding-bottom:2px;">
+              ${reputation.rating_count} review${reputation.rating_count === 1 ? '' : 's'}
+            </div>
+          </div>
+          ${reputation.under_review ? `<div style="margin-top:12px;font-size:12px;color:var(--text-muted);">This flag is informational and based on open reports from the last 30 days.</div>` : ''}
+        `;
         const statsHtml = user.role === 'donor' ? `
           <div class="stat-card"><div class="stat-label">Posts Created</div><div class="stat-value green" data-count="${posts.length}">0</div></div>
           <div class="stat-card"><div class="stat-label">Delivered</div><div class="stat-value amber" data-count="${posts.filter(p=>p.status==='delivered').length}">0</div></div>
@@ -869,7 +1360,144 @@
         `;
         document.getElementById('profileStats').innerHTML = statsHtml;
         document.querySelectorAll('#profileStats [data-count]').forEach(e => countUp(e, +e.dataset.count));
-      } catch (e) {}
+      } catch (e) {
+        document.getElementById('reputationCard').innerHTML = `
+          <div style="font-size:13px;color:var(--text-muted);">Unable to load trust score right now.</div>
+        `;
+      }
+    }
+
+    function kmDistance(lat1, lon1, lat2, lon2) {
+      const toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+      return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function normalizeTel(phone = '') {
+      const cleaned = String(phone).replace(/[^\d+]/g, '');
+      return cleaned.startsWith('+') ? cleaned : cleaned.replace(/\+/g, '');
+    }
+
+    function renderSupportCentersList(container, centers) {
+      if (!container) return;
+      if (!centers.length) {
+        container.innerHTML = `<div style="font-size:13px;color:var(--text-muted);">No NGO/orphanage/homeless support contacts found nearby.</div>`;
+        return;
+      }
+      container.innerHTML = centers.map((r) => `
+        <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+          <div style="font-size:14px;font-weight:700;">${escapeHtml(r.name)}</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Type: ${escapeHtml(r.type || 'community support')}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${escapeHtml(r.address || 'Address not listed')}</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Phone: ${r.phone ? escapeHtml(r.phone) : 'Not listed'}</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">~ ${Number(r.distance_km || 0).toFixed(1)} km away</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
+            ${r.phone ? `<a href="tel:${normalizeTel(r.phone)}" style="font-size:12px;">Call</a>` : ''}
+            ${Number.isFinite(r.latitude) && Number.isFinite(r.longitude) ? `<a target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps/dir/?api=1&destination=${r.latitude},${r.longitude}" style="font-size:12px;">Open directions</a>` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function loadDonorHomeContactsByLocation() {
+      const btn = document.getElementById('homeContactsBtn');
+      const list = document.getElementById('homeSupportContacts');
+      if (!btn || !list) return;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Getting location…';
+
+      const loadByAddressFallback = async (reasonText) => {
+        if (!user.address || user.address.trim().length < 3) {
+          list.innerHTML = `<div style="font-size:13px;color:var(--text-muted);">${reasonText} Add donor address in profile to load contacts.</div>`;
+          btn.disabled = false;
+          btn.innerHTML = 'Use My Location';
+          return;
+        }
+        btn.innerHTML = '<span class="spinner"></span> Loading by address…';
+        const result = await api(`/support-centers/nearby?address=${encodeURIComponent(user.address)}`);
+        const centers = Array.isArray(result?.centers) ? result.centers : [];
+        list.innerHTML = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Location blocked, showing contacts near profile address.</div>`;
+        if (centers.length) {
+          const wrap = document.createElement('div');
+          renderSupportCentersList(wrap, centers);
+          list.appendChild(wrap);
+        } else {
+          list.insertAdjacentHTML('beforeend', `<div style="font-size:13px;color:var(--text-muted);">No nearby contacts found for profile address.</div>`);
+        }
+        btn.disabled = false;
+        btn.innerHTML = 'Refresh by Address';
+      };
+
+      if (!window.isSecureContext) {
+        await loadByAddressFallback('Location access requires HTTPS on iPhone.');
+        return;
+      }
+
+      if (!navigator.geolocation) {
+        await loadByAddressFallback('Geolocation is not supported on this device.');
+        return;
+      }
+
+      try {
+        await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(async (pos) => {
+            try {
+              btn.innerHTML = '<span class="spinner"></span> Loading contacts…';
+              const lat = pos.coords.latitude;
+              const lng = pos.coords.longitude;
+              const result = await api(`/support-centers/nearby?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`);
+              const centers = Array.isArray(result?.centers) ? result.centers : [];
+              renderSupportCentersList(list, centers);
+              btn.disabled = false;
+              btn.innerHTML = 'Refresh by Location';
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          }, async () => {
+            try {
+              await loadByAddressFallback('Location permission denied.');
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          }, { enableHighAccuracy: true, timeout: 10000 });
+        });
+      } catch (e) {
+        try {
+          await loadByAddressFallback('Unable to access live location.');
+        } catch (fallbackErr) {
+          list.innerHTML = `<div style="font-size:13px;color:var(--text-muted);">Could not fetch nearby contacts right now.</div>`;
+          btn.disabled = false;
+          btn.innerHTML = 'Use My Location';
+        }
+      }
+    }
+
+    async function loadSupportContactsByAddress() {
+      const btn = document.getElementById('loadSupportBtn');
+      const list = document.getElementById('supportPlacesList');
+      if (!btn || !list) return;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Loading contacts…';
+
+      try {
+        if (!user.address || user.address.trim().length < 3) {
+          list.innerHTML = `<div style="font-size:13px;color:var(--text-muted);">Add your address in profile to fetch nearby NGO/shelter contacts.</div>`;
+          return;
+        }
+
+        const result = await api(`/support-centers/nearby?address=${encodeURIComponent(user.address)}`);
+        const top = Array.isArray(result?.centers) ? result.centers : [];
+        renderSupportCentersList(list, top);
+      } catch (e) {
+        list.innerHTML = `<div style="font-size:13px;color:var(--text-muted);">Could not fetch NGO/shelter contacts right now.</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Refresh Contacts';
+      }
     }
 
     // ═══════════════════════════════════════════════════
