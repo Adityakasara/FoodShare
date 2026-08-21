@@ -1,73 +1,85 @@
-# 🍽️ FoodShare
+<div align="center">
 
-FoodShare is a modern, responsive full-stack web application designed to connect food donors (restaurants, events, individuals) with volunteers who can deliver surplus food to those in need.
+# 🍽️ FoodShare — Community Food Rescue & Distribution Platform
 
-![Dashboard Preview](https://via.placeholder.com/800x400?text=FoodShare+Dashboard)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Active-22c55e?style=for-the-badge&logo=googlechrome&logoColor=white)](https://adityakasara.github.io/FoodShare/)
+[![Deployed on](https://img.shields.io/badge/Deployed_on-GitHub_Pages-10b981?style=for-the-badge&logo=github&logoColor=white)](https://adityakasara.github.io/FoodShare/)
+[![PWA Ready](https://img.shields.io/badge/PWA-Installable-blue?style=for-the-badge&logo=pwa&logoColor=white)](https://adityakasara.github.io/FoodShare/)
+[![License](https://img.shields.io/badge/License-MIT-gray?style=for-the-badge)](LICENSE)
 
-## ✨ Features
-*   **Dual Roles Support:** Separate dashboards and workflows for Donors and Volunteers.
-*   **Priority Distribution Engine:** Automatically calculates urgency based on food expiry time (Critical, High, Medium, Low).
-*   **Live Delivery Tracking:** Interactive stepper tracking food from "Posted" to "Delivered".
-*   **Glassmorphic UI:** Premium, modern aesthetic with animated gradients, smooth interactions, and skeleton loaders.
-*   **Impact Leaderboard:** Real-time statistics tracking top donors and active volunteers.
-*   **Mobile-First PWA:** Fully optimized for iPhones with "Add to Home Screen" support, hiding browser chrome for a native-like feel.
+**A modern, responsive full-stack platform designed to connect surplus food donors (restaurants, caterers, individuals) with local volunteers to reduce food waste and feed communities in real-time.**
 
-## 🛠️ Tech Stack
-*   **Frontend:** HTML5, Vanilla JavaScript, CSS3 (Custom Variables, CSS Grid/Flexbox)
-*   **Backend:** Node.js, Express.js
-*   **Database:** SQLite (better-sqlite3)
-*   **Maps/Geolocation:** Leaflet.js
-*   **Icons/Fonts:** Google Fonts (Outfit)
+---
 
-## 💸 Revenue Model (Judge Pitch)
-FoodShare is designed as a social-impact platform with sustainable B2B + B2G revenue:
+### 🌐 [Click Here to Access the Live Web App →](https://adityakasara.github.io/FoodShare/)
 
-*   **NGO/City SaaS Dashboard:** Monthly subscription for NGOs/municipal bodies to get analytics, hotspot maps, and operational reporting.
-*   **Enterprise Donor Plans:** Restaurants, hotels, and event companies pay for branded accounts, CSR impact reports, and API integrations.
-*   **Verified Logistics Add-on:** Optional paid dispatch/SLA layer for priority pickups where volunteer coverage is low.
-*   **Impact Insights API:** Aggregated, anonymized food-waste and rescue metrics for research, policy, and ESG reporting.
-*   **Grant + CSR Partnerships:** Launch-phase support through foundations and CSR programs while transaction volume scales.
+</div>
 
-## 🚀 How to Run Locally (For Judges/Evaluators)
+---
 
-To run this project on your own machine, follow these steps:
+## ✨ Key Platform Features
+
+- 👥 **Dual Role Ecosystem**: Tailored workflows and real-time dashboards for **Food Donors** and **Community Volunteers**.
+- ⚡ **Urgency Distribution Engine**: Automatically categorizes priority based on food expiration time (*Critical*, *High*, *Medium*, *Low*).
+- 📍 **Live Delivery Stepper**: Visual multi-stage status tracker from *Surplus Posted* ➔ *Volunteer Claimed* ➔ *Out for Delivery* ➔ *Delivered*.
+- 💎 **Glassmorphic UI**: Dynamic dark-mode aesthetic with ambient gradients, tactile buttons, and micro-animations.
+- 📱 **Mobile-First Progressive Web App (PWA)**: Installable on iOS & Android with standalone display, custom theme colors, and offline capability.
+- 🏆 **Impact Leaderboard**: Live statistics showcasing top donors and active community volunteers.
+
+---
+
+## 🛠️ Technology Stack
+
+| Layer | Technologies |
+| :--- | :--- |
+| **Frontend** | HTML5, Modern Vanilla JavaScript (ES6+), CSS3 (Grid, Flexbox, Custom Design Tokens) |
+| **PWA** | Service Workers, Web App Manifest, App-like touch icons |
+| **Styling & UI** | Glassmorphism, Google Fonts (`Outfit`, `Plus Jakarta Sans`) |
+| **Backend & API** | Node.js, Express.js REST API |
+| **Database & Maps** | SQLite (`better-sqlite3`), Leaflet.js Geolocation |
+
+---
+
+## 🚀 How to Run Locally (For Judges & Evaluators)
 
 ### 1. Prerequisites
-You need **Node.js** (v16 or higher) installed on your computer.
-[Download Node.js here](https://nodejs.org/)
+- **Node.js** (v16 or higher) installed on your system.
 
 ### 2. Clone the Repository
-Open your terminal or command prompt and run:
 ```bash
 git clone https://github.com/Adityakasara/FoodShare.git
 cd FoodShare
 ```
 
-### 3. Install Dependencies
-Navigate to the `backend` folder and install the required Node modules:
+### 3. Install & Run Backend Server
 ```bash
 cd backend
 npm install
-```
-
-### 4. Start the Server
-Run the application server:
-```bash
 node server.js
 ```
-*Note: This starts the backend API on port 3000 and serves the frontend static files automatically.*
+*The server starts the REST API on port `3000` and serves the frontend static assets automatically.*
 
-### 5. Open the App in your Browser
-Once the server is running, open your web browser and navigate to:
-```
-http://localhost:3000
-```
-
-### 📱 Testing on a Mobile Device (iPhone/Android)
-To test the mobile-responsive UI on a real phone:
-1. Ensure your laptop and phone are connected to the **same Wi-Fi network**.
-2. When you start the server using `node server.js`, check the terminal output. It will display a "Local Network IP" (e.g., `http://192.168.1.5:3000`).
-3. Type that exact URL into your phone's browser (Safari/Chrome).
+### 4. Open in Browser
+Visit **`http://localhost:3000`** in your browser.
 
 ---
-*Built with ❤️ for community food sharing.*
+
+## 📱 Testing on Mobile (iPhone / Android)
+
+1. Connect your computer and mobile phone to the **same Wi-Fi network**.
+2. Start the server using `node server.js` and check the displayed Local IP (e.g. `http://192.168.1.5:3000`).
+3. Open that URL on Safari / Chrome on your phone, then tap **"Add to Home Screen"** for full PWA experience.
+
+---
+
+## 👤 Author & Developer
+
+**Aditya Kasara**  
+- 🌐 **Live Web App:** [adityakasara.github.io/FoodShare](https://adityakasara.github.io/FoodShare/)  
+- 🐙 **GitHub:** [@Adityakasara](https://github.com/Adityakasara)
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ for community food sharing & zero waste initiatives.</sub>
+</div>
