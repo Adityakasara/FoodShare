@@ -2,7 +2,7 @@
   "name": "FoodShare",
   "short_name": "FoodShare",
   "description": "Connecting food donors with volunteers for community distribution",
-  "start_url": "/",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0a0f0d",
   "theme_color": "#48c774",

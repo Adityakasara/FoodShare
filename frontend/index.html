@@ -129,14 +129,15 @@
   }
 </style>
 
+<script src="js/api-adapter.js"></script>
 <script>
-const API = '/api';
 let selectedRole = '';
 
 /* ── Particles ─────────────────────── */
 (function spawnParticles() {
   const emojis = ['🍎','🥦','🍞','🥛','🍛','🍪','🥕','🍚','🌽','🥗'];
   const box = document.getElementById('particles');
+  if (!box) return;
   for (let i = 0; i < 14; i++) {
     const p = document.createElement('div');
     p.className = 'particle';
@@ -174,7 +175,7 @@ function toast(msg, type = 'info') {
   t.className = `toast toast-${type}`;
   t.appendChild(document.createTextNode(msg));
   document.getElementById('toast-container').appendChild(t);
-  setTimeout(() => t.remove(), 5000);
+  setTimeout(() => t.remove(), 4000);
 }
 
 function saveAndRedirect(data) {
@@ -190,18 +191,15 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
   btn.innerHTML = '<span class="spinner"></span> Signing in…';
   btn.disabled = true;
   try {
-    const res = await fetch(`${API}/auth/login`, {
+    const data = await window.fsApi('/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email:    document.getElementById('loginEmail').value,
+        email:    document.getElementById('loginEmail').value.trim(),
         password: document.getElementById('loginPassword').value
       })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
     toast('Welcome back! Redirecting…', 'success');
-    setTimeout(() => saveAndRedirect(data), 700);
+    setTimeout(() => saveAndRedirect(data), 600);
   } catch (err) {
     toast(err.message || 'Login failed', 'error');
     btn.innerHTML = 'Sign In';
@@ -217,22 +215,19 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
   btn.innerHTML = '<span class="spinner"></span> Creating account…';
   btn.disabled = true;
   try {
-    const res = await fetch(`${API}/auth/register`, {
+    const data = await window.fsApi('/auth/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name:     document.getElementById('regName').value,
-        email:    document.getElementById('regEmail').value,
+        name:     document.getElementById('regName').value.trim(),
+        email:    document.getElementById('regEmail').value.trim(),
         password: document.getElementById('regPassword').value,
         role:     selectedRole,
-        phone:    document.getElementById('regPhone').value,
-        address:  document.getElementById('regAddress').value
+        phone:    document.getElementById('regPhone').value.trim(),
+        address:  document.getElementById('regAddress').value.trim()
       })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
     toast('🎉 Account created! Welcome to FoodShare!', 'success');
-    setTimeout(() => saveAndRedirect(data), 700);
+    setTimeout(() => saveAndRedirect(data), 600);
   } catch (err) {
     toast(err.message || 'Registration failed', 'error');
     btn.innerHTML = 'Create Account →';
@@ -243,33 +238,44 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
 /* ── Demo login ────────────────────── */
 async function loginDemo(role) {
   const demos = {
-    donor:     { email: 'demo.donor@foodshare.app',     password: 'demo1234', name: 'Demo Donor',     phone: '+91 9876543210', address: 'Mumbai, India' },
-    volunteer: { email: 'demo.volunteer@foodshare.app', password: 'demo1234', name: 'Demo Volunteer', phone: '+91 9123456789', address: 'Delhi, India' }
+    donor:     { email: 'demo.donor@foodshare.app',     password: 'demo1234', name: 'Ravi Sharma (Demo Donor)',     phone: '+91 98765 43210', address: 'Bandra West, Mumbai, Maharashtra' },
+    volunteer: { email: 'demo.volunteer@foodshare.app', password: 'demo1234', name: 'Priya Patel (Demo Volunteer)', phone: '+91 91234 56789', address: 'Andheri East, Mumbai, Maharashtra' }
   };
   const d = demos[role];
   toast(`Logging in as ${role}…`, 'info');
-  let res = await fetch(`${API}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: d.email, password: d.password })
-  });
-  if (!res.ok) {
-    res = await fetch(`${API}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...d, role })
-    });
+  try {
+    let data;
+    try {
+      data = await window.fsApi('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: d.email, password: d.password })
+      });
+    } catch (loginErr) {
+      data = await window.fsApi('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ ...d, role })
+      });
+    }
+    if (data && data.token) {
+      toast(`Welcome, ${d.name}! 🎉`, 'success');
+      setTimeout(() => saveAndRedirect(data), 500);
+    }
+  } catch (err) {
+    toast(err.message || 'Demo login failed', 'error');
   }
-  const data = await res.json();
-  if (data.token) { toast(`Welcome, ${role}! 🎉`, 'success'); setTimeout(() => saveAndRedirect(data), 600); }
 }
 
 /* ── Auto-redirect ─────────────────── */
-if (localStorage.getItem('fs_token')) window.location.href = 'dashboard.html';
+if (localStorage.getItem('fs_token')) {
+  try {
+    const user = JSON.parse(localStorage.getItem('fs_user') || 'null');
+    if (user) window.location.href = 'dashboard.html';
+  } catch (e) {}
+}
 
 /* ── Service Worker ────────────────── */
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 </script>
 </body>

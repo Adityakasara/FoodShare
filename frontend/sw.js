@@ -1,15 +1,16 @@
-const CACHE_NAME = 'foodshare-v5';
+const CACHE_NAME = 'foodshare-v6';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/dashboard.html',
-  '/css/style.css',
-  '/manifest.json'
+  './',
+  './index.html',
+  './dashboard.html',
+  './css/style.css',
+  './js/api-adapter.js',
+  './manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)).catch(() => {})
   );
   self.skipWaiting();
 });
@@ -37,8 +38,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for static assets
+  // Cache-first for static assets with network fallback
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    caches.match(event.request).then((cached) => cached || fetch(event.request).catch(() => cached))
   );
 });
+

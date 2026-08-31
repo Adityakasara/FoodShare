@@ -75,11 +75,11 @@
 
   <div id="toast-container"></div>
 
+  <script src="js/api-adapter.js"></script>
   <script>
     // ═══════════════════════════════════════════════════
     // GLOBALS
     // ═══════════════════════════════════════════════════
-    const API = '/api';
     let token = localStorage.getItem('fs_token');
     let user  = JSON.parse(localStorage.getItem('fs_user') || 'null');
     let currentView = 'home';
@@ -98,18 +98,7 @@
     // API HELPER
     // ═══════════════════════════════════════════════════
     function api(path, opts = {}) {
-      return fetch(API + path, {
-        ...opts,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(opts.headers || {})
-        }
-      }).then(async r => {
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || 'Request failed');
-        return d;
-      });
+      return window.fsApi(path, opts);
     }
 
     // ═══════════════════════════════════════════════════
@@ -1554,7 +1543,7 @@
 
     // Service worker
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
     }
   </script>
 </body>
